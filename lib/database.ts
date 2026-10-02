@@ -1,8 +1,25 @@
 import Database from "better-sqlite3";
 import path from "path";
+import fs from "fs";
 
-/** Đường dẫn tới file SQLite */
-const DB_PATH = path.join("D:/projects", "ztteam-pipeline.db");
+/** Đường dẫn tới file SQLite: Ưu tiên DB_PATH -> D:/projects (Local Windows cũ) -> ./data/ztteam-pipeline.db (VPS/Docker) */
+function getDatabasePath(): string {
+  if (process.env.DB_PATH) {
+    const dir = path.dirname(process.env.DB_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return process.env.DB_PATH;
+  }
+  if (fs.existsSync("D:/projects")) {
+    return path.join("D:/projects", "ztteam-pipeline.db");
+  }
+  const defaultDir = path.join(process.cwd(), "data");
+  if (!fs.existsSync(defaultDir)) {
+    fs.mkdirSync(defaultDir, { recursive: true });
+  }
+  return path.join(defaultDir, "ztteam-pipeline.db");
+}
+
+const DB_PATH = getDatabasePath();
 
 /** Khởi tạo database connection */
 const db = new Database(DB_PATH);
@@ -43,6 +60,31 @@ db.exec(`
     FOREIGN KEY (article_id) REFERENCES ztteam_articles(id)
   )
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ztteam_wp_sites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    site_url TEXT NOT NULL,
+    username TEXT NOT NULL,
+    app_password TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now', '+7 hours'))
+  )
+`);
+
+/** Auto migrations */
+try { db.exec("ALTER TABLE ztteam_articles ADD COLUMN hook_text TEXT"); } catch {}
+try { db.exec("ALTER TABLE ztteam_articles ADD COLUMN video_type TEXT DEFAULT 'voice'"); } catch {}
+
+/** Interface cho ZTTeamWpSite */
+export interface ZTTeamWpSite {
+  id: number;
+  name: string;
+  site_url: string;
+  username: string;
+  app_password: string;
+  created_at: string;
+}
+
 /** Interface cho ZTTeamArticle */
 export interface ZTTeamArticle {
   id: number;
@@ -60,6 +102,8 @@ export interface ZTTeamArticle {
   content_new: string | null;
   large_title: string | null;
   small_title: string | null;
+  hook_text: string | null;
+  video_type: string | null;
   video_path: string | null;
   video_folder: string | null;
   wp_link: string | null;
@@ -155,6 +199,7 @@ export function ztteam_updateGeneratedContent(
     audio_path?: string | null;
     large_title?: string | null;
     small_title?: string | null;
+    hook_text?: string | null;
     content_new?: string | null;
   },
 ): ZTTeamArticle | undefined {
@@ -171,6 +216,7 @@ export function ztteam_updateGeneratedContent(
         content_new = @content_new,
         large_title = @large_title,
         small_title = @small_title,
+        hook_text = @hook_text,
         status = 'ready',
         updated_at = datetime('now', '+7 hours')
     WHERE id = @id
@@ -189,6 +235,8 @@ export function ztteam_updateGeneratedContent(
       data.large_title !== undefined ? data.large_title : current.large_title,
     small_title:
       data.small_title !== undefined ? data.small_title : current.small_title,
+    hook_text:
+      data.hook_text !== undefined ? data.hook_text : current.hook_text,
     content_new:
       data.content_new !== undefined ? data.content_new : current.content_new,
     id,
@@ -312,6 +360,8 @@ export function ztteam_updateVideoInfo(
     video_path?: string | null;
     video_folder?: string | null;
     wp_link?: string | null;
+    hook_text?: string | null;
+    video_type?: string | null;
   },
 ): ZTTeamArticle | undefined {
   const current = ztteam_getArticleById(id);
@@ -323,6 +373,8 @@ export function ztteam_updateVideoInfo(
       video_path = ?,
       video_folder = ?,
       wp_link = ?,
+      hook_text = ?,
+      video_type = ?,
       updated_at = datetime('now', '+7 hours')
     WHERE id = ?
   `,
@@ -330,6 +382,8 @@ export function ztteam_updateVideoInfo(
     data.video_path !== undefined ? data.video_path : current.video_path,
     data.video_folder !== undefined ? data.video_folder : current.video_folder,
     data.wp_link !== undefined ? data.wp_link : current.wp_link,
+    data.hook_text !== undefined ? data.hook_text : current.hook_text,
+    data.video_type !== undefined ? data.video_type : current.video_type,
     id,
   );
   return ztteam_getArticleById(id);
@@ -345,6 +399,41 @@ export function ztteam_markFanpageDone(id: number): ZTTeamArticle | undefined {
   `,
   ).run(id);
   return ztteam_getArticleById(id);
+}
+
+/** Lấy tất cả WordPress sites */
+export function ztteam_getAllWpSites(): ZTTeamWpSite[] {
+  return db
+    .prepare(`SELECT * FROM ztteam_wp_sites ORDER BY created_at DESC`)
+    .all() as ZTTeamWpSite[];
+}
+
+/** Lấy WP site theo ID */
+export function ztteam_getWpSiteById(id: number): ZTTeamWpSite | undefined {
+  return db.prepare(`SELECT * FROM ztteam_wp_sites WHERE id = ?`).get(id) as
+    | ZTTeamWpSite
+    | undefined;
+}
+
+/** Thêm WP site mới */
+export function ztteam_insertWpSite(data: {
+  name: string;
+  site_url: string;
+  username: string;
+  app_password: string;
+}): ZTTeamWpSite {
+  const stmt = db.prepare(`
+    INSERT INTO ztteam_wp_sites (name, site_url, username, app_password)
+    VALUES (@name, @site_url, @username, @app_password)
+  `);
+  const result = stmt.run(data);
+  return ztteam_getWpSiteById(result.lastInsertRowid as number)!;
+}
+
+/** Xóa WP site */
+export function ztteam_deleteWpSite(id: number): boolean {
+  const result = db.prepare(`DELETE FROM ztteam_wp_sites WHERE id = ?`).run(id);
+  return result.changes > 0;
 }
 
 /** Export database instance */

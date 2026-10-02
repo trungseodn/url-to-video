@@ -10,6 +10,8 @@ const ztteam_navItems = [
   { href: "/dashboard/generate", icon: "auto_awesome", label: "AI Generate" },
   { href: "/dashboard/review", icon: "rate_review", label: "Review" },
   { href: "/dashboard/video", icon: "movie", label: "Video" },
+  { href: "/dashboard/url-to-video", icon: "smart_display", label: "URL to Video" },
+  { href: "/dashboard/url-to-image", icon: "auto_awesome_mosaic", label: "URL to Image" },
 ];
 
 export default function ZTTeamSidebar() {

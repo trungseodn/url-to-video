@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ztteam_getWpSiteById } from "@/lib/database";
 
 /** POST /api/publish-wp */
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const body = await request.json();
-    const { title, content, featuredImageUrl } = body;
+    const { title, content, featuredImageUrl, siteId, customSiteUrl, customUsername, customAppPassword } = body;
 
     if (!title || !content) {
       return NextResponse.json(
@@ -13,34 +14,43 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const siteUrl = process.env.WP_SITE_URL;
-    const username = process.env.WP_USERNAME;
-    const appPassword = process.env.WP_APP_PASSWORD;
+    let siteUrl: string | undefined = customSiteUrl || process.env.WP_SITE_URL;
+    let username: string | undefined = customUsername || process.env.WP_USERNAME;
+    let appPassword: string | undefined = customAppPassword || process.env.WP_APP_PASSWORD;
+
+    /** Nếu có siteId, lấy cấu hình từ DB ztteam_wp_sites */
+    if (siteId) {
+      const wpSite = ztteam_getWpSiteById(Number(siteId));
+      if (wpSite) {
+        siteUrl = wpSite.site_url;
+        username = wpSite.username;
+        appPassword = wpSite.app_password;
+      }
+    }
 
     if (!siteUrl || !username || !appPassword) {
       return NextResponse.json(
-        { success: false, error: "Thiếu cấu hình WordPress" },
+        { success: false, error: "Thiếu cấu hình kết nối WordPress" },
         { status: 500 },
       );
     }
 
+    /** Chuẩn hóa siteUrl loại bỏ dấu slash cuối */
+    siteUrl = siteUrl.trim().replace(/\/+$/, "");
+
     const credentials = Buffer.from(`${username}:${appPassword}`).toString(
       "base64",
     );
-    const exists = await ztteam_checkPostExists(title, siteUrl, credentials);
-    if (exists) {
-      return NextResponse.json(
-        { success: false, error: "Bài viết này đã tồn tại trên WordPress!" },
-        { status: 409 },
-      );
-    }
+
+    /** Kiểm tra xem bài viết đã tồn tại trên WordPress chưa */
+    const existingPost = await ztteam_findExistingPost(title, siteUrl, credentials);
 
     const headers = {
       Authorization: `Basic ${credentials}`,
       "Content-Type": "application/json",
     };
 
-    /** Upload featured image nếu có */
+    /** 1. Upload ảnh đại diện (featured image) nếu có */
     let featuredMediaId: number | null = null;
     let featuredMediaUrl: string | null = null;
 
@@ -54,21 +64,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       featuredMediaUrl = uploadResult?.url || null;
     }
 
-    /** Thay thế URL ảnh local trong content bằng URL WordPress */
-    let finalContent = content;
-    /** Strip query string để match đúng trong content */
+    /** 2. Tự động upload TẤT CẢ các ảnh nằm trong thân bài viết lên WordPress Media Library */
+    let finalContent = await ztteam_processAndUploadAllContentImages(
+      content,
+      siteUrl,
+      credentials,
+    );
+
+    /** Đổi URL ảnh đại diện nếu nó xuất hiện trong nội dung */
     const cleanFeaturedUrl = featuredImageUrl
       ? featuredImageUrl.split("?")[0]
       : null;
-    console.log("featuredImageUrl:", featuredImageUrl);
-    console.log("cleanFeaturedUrl:", cleanFeaturedUrl);
-    console.log("featuredMediaUrl:", featuredMediaUrl);
-    console.log(
-      "content includes image:",
-      content.includes(cleanFeaturedUrl || ""),
-    );
+
     if (featuredMediaUrl && cleanFeaturedUrl) {
-      finalContent = content.replace(
+      finalContent = finalContent.replace(
         new RegExp(
           cleanFeaturedUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
           "g",
@@ -77,7 +86,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
-    /** Tạo bài viết */
+    /** Tạo hoặc Cập nhật bài viết */
     const postData: Record<string, unknown> = {
       title,
       content: finalContent,
@@ -88,7 +97,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       postData.featured_media = featuredMediaId;
     }
 
-    const postResponse = await fetch(`${siteUrl}/wp-json/wp/v2/posts`, {
+    /** Nếu bài viết đã tồn tại -> Gửi POST tới endpoint ID bài viết đó để CẬP NHẬT nội dung */
+    let targetEndpoint = `${siteUrl}/wp-json/wp/v2/posts`;
+    let isUpdate = false;
+
+    if (existingPost) {
+      targetEndpoint = `${siteUrl}/wp-json/wp/v2/posts/${existingPost.id}`;
+      isUpdate = true;
+    }
+
+    const postResponse = await fetch(targetEndpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(postData),
@@ -96,13 +114,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     if (!postResponse.ok) {
       const error = await postResponse.json();
-      throw new Error(error.message || "Không thể tạo bài viết");
+      throw new Error(
+        error.message || (isUpdate ? "Không thể cập nhật bài viết trên WordPress" : "Không thể tạo bài viết trên WordPress")
+      );
     }
 
     const post = await postResponse.json();
 
     return NextResponse.json({
       success: true,
+      isUpdate,
+      message: isUpdate ? "Cập nhật bài viết thành công trên WordPress!" : "Tạo bài viết mới thành công trên WordPress!",
       data: {
         id: post.id,
         link: post.link,
@@ -112,7 +134,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Có lỗi xảy ra";
     const stack = error instanceof Error ? error.stack : "";
-    console.error("Fetch error:", message, stack);
+    console.error("Publish WP error:", message, stack);
     return NextResponse.json(
       { success: false, error: message, stack },
       { status: 500 },
@@ -120,14 +142,55 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 }
 
-/** Upload ảnh đại diện lên WordPress Media Library */
+/** Tự động quét và Upload toàn bộ các ảnh nằm trong thân bài viết lên WordPress Media Library */
+async function ztteam_processAndUploadAllContentImages(
+  content: string,
+  siteUrl: string,
+  credentials: string,
+): Promise<string> {
+  if (!content) return content;
+
+  /** Tìm tất cả đường dẫn trong thuộc tính src của các thẻ <img ... src="..."> */
+  const imgRegex = /<img[^>]+src=["']([^"']+)["']/g;
+  const imageUrls = new Set<string>();
+  let match;
+
+  while ((match = imgRegex.exec(content)) !== null) {
+    if (match[1]) imageUrls.add(match[1]);
+  }
+
+  let updatedContent = content;
+
+  for (const imgUrl of Array.from(imageUrls)) {
+    try {
+      const uploadResult = await ztteam_uploadFeaturedImage(
+        imgUrl,
+        siteUrl,
+        credentials,
+      );
+      if (uploadResult?.url) {
+        const cleanUrl = imgUrl.split("?")[0];
+        updatedContent = updatedContent.replace(
+          new RegExp(cleanUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"),
+          uploadResult.url,
+        );
+      }
+    } catch (err) {
+      console.error(`Không thể upload ảnh thân bài viết (${imgUrl}):`, err);
+    }
+  }
+
+  return updatedContent;
+}
+
+/** Upload ảnh lên WordPress Media Library */
 async function ztteam_uploadFeaturedImage(
   imageUrl: string,
   siteUrl: string,
   credentials: string,
 ): Promise<{ id: number; url: string } | null> {
   try {
-    /** Fetch ảnh — hỗ trợ cả URL local (Next.js) và URL bên ngoài */
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
     let imageBuffer: ArrayBuffer;
     let contentType: string;
     let filename: string;
@@ -136,7 +199,6 @@ async function ztteam_uploadFeaturedImage(
       /** Ảnh local từ Next.js public folder */
       const fs = await import("fs");
       const path = await import("path");
-      /** Strip query string trước khi đọc file */
       const cleanImageUrl = imageUrl.split("?")[0];
       const localPath = path.join(process.cwd(), "public", cleanImageUrl);
       const fileBuffer = fs.readFileSync(localPath);
@@ -144,12 +206,23 @@ async function ztteam_uploadFeaturedImage(
         fileBuffer.byteOffset,
         fileBuffer.byteOffset + fileBuffer.byteLength,
       );
-      contentType = "image/png";
-      filename = cleanImageUrl.split("/").pop() || "featured-image.png";
+      filename = cleanImageUrl.split("/").pop() || "featured-image.jpg";
+      const ext = filename.split(".").pop()?.toLowerCase();
+      if (ext === "webp") contentType = "image/webp";
+      else if (ext === "png") contentType = "image/png";
+      else if (ext === "gif") contentType = "image/gif";
+      else contentType = "image/jpeg";
     } else {
       /** Ảnh từ URL bên ngoài */
+      const imgOrigin = new URL(imageUrl).origin + "/";
       const imageResponse = await fetch(imageUrl, {
-        headers: { "User-Agent": "Mozilla/5.0" },
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          Referer: imgOrigin,
+          Accept:
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        },
       });
       if (!imageResponse.ok) return null;
       imageBuffer = await imageResponse.arrayBuffer();
@@ -181,12 +254,12 @@ async function ztteam_uploadFeaturedImage(
   }
 }
 
-/** Kiểm tra bài viết đã tồn tại theo title */
-async function ztteam_checkPostExists(
+/** Tìm bài viết đã tồn tại trên WordPress theo tiêu đề */
+async function ztteam_findExistingPost(
   title: string,
   siteUrl: string,
   credentials: string,
-): Promise<boolean> {
+): Promise<{ id: number; link: string } | null> {
   try {
     const response = await fetch(
       `${siteUrl}/wp-json/wp/v2/posts?per_page=100&orderby=date&order=desc`,
@@ -195,7 +268,7 @@ async function ztteam_checkPostExists(
       },
     );
 
-    if (!response.ok) return false;
+    if (!response.ok) return null;
 
     const posts = await response.json();
     const normalizedTitle = title
@@ -204,9 +277,8 @@ async function ztteam_checkPostExists(
       .replace(/[-–—]+$/, "")
       .trim();
 
-    return posts.some((post: { title: { rendered: string } }) => {
-      /** Decode HTML entities từ WP title */
-      const wpTitle = post.title.rendered
+    for (const post of posts) {
+      const wpTitle = (post.title?.rendered || "")
         .replace(/&#8211;/g, "–")
         .replace(/&#8212;/g, "—")
         .replace(/&amp;/g, "&")
@@ -218,9 +290,13 @@ async function ztteam_checkPostExists(
         .trim()
         .toLowerCase();
 
-      return wpTitle === normalizedTitle;
-    });
+      if (wpTitle === normalizedTitle) {
+        return { id: post.id, link: post.link };
+      }
+    }
+
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }

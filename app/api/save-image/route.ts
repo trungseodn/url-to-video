@@ -23,7 +23,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
 
     /** Lưu file */
-    const filename = `ztteam-image-${articleId}-${Date.now()}.png`;
+    const filename = `image-${articleId}-${Date.now()}.png`;
     const filepath = path.join(imageDir, filename);
     const buffer = Buffer.from(base64Data, "base64");
     await writeFile(filepath, buffer);

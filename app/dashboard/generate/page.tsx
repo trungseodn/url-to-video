@@ -1,7 +1,10 @@
 "use client";
+// Fresh build trigger: 2026-09-30 T09:49:45
 
 import { useState, useEffect, useRef } from "react";
 import type { ZTTeamArticle } from "@/lib/database";
+import { ztteam_generateContentWithRetry, ztteam_formatGeminiError } from "@/lib/gemini";
+
 /** Ghi log API usage sau mỗi lần gọi Gemini */
 async function ztteam_logApiUsage(data: {
   article_id: number;
@@ -28,6 +31,7 @@ interface ZTTeamScriptData {
   socialPost: string;
   largeTitle: string;
   smallTitle: string;
+  hookText: string;
   contentNew: string;
 }
 
@@ -80,46 +84,41 @@ function ZTTeamCompareRow({
           {original}
         </div>
         <div className="p-4">
-          <p className="text-xs font-semibold text-purple-400 mb-2">AI mới</p>
+          <p className="text-xs font-semibold text-purple-400 mb-2">Mới</p>
           {generated}
         </div>
       </div>
     </div>
   );
 }
-/** Chèn ảnh AI vào sau đoạn văn đầu tiên của content */
+
+/** Chèn ảnh vào sau block đầu tiên của content */
 function ztteam_buildContentNew(
   contentHtml: string,
   imagePath: string | null,
 ): string {
   if (!imagePath) return contentHtml;
-  const imageTag = `<figure class="wp-block-image aligncenter">
-  <img src="${imagePath}" alt="featured image" />
-</figure>`;
-  /** Tìm thẻ block đầu tiên (<p>, <h2>, <h3>) và chèn ảnh sau nó */
-  const firstBlockEnd = Math.min(
-    ...[
-      contentHtml.indexOf("</p>"),
-      contentHtml.indexOf("</h2>"),
-      contentHtml.indexOf("</h3>"),
-    ]
-      .filter((i) => i !== -1)
-      .concat([contentHtml.length]),
-  );
-  const tagLength =
-    contentHtml[firstBlockEnd + 2] === "p"
-      ? 4
-      : contentHtml[firstBlockEnd + 2] === "h"
-        ? 5
-        : 4;
-  if (firstBlockEnd === contentHtml.length)
-    return `${imageTag}\n${contentHtml}`;
+  /** Strip query string */
+  const cleanPath = imagePath.split("?")[0];
+  const imageTag = `<figure class="wp-block-image aligncenter"><img src="${cleanPath}" alt="featured image" /></figure>`;
+  /** Tìm closing tag đầu tiên */
+  const closingTags = ["</p>", "</h2>", "</h3>", "</h4>"];
+  let firstEnd = -1;
+  let tagLen = 0;
+  for (const tag of closingTags) {
+    const idx = contentHtml.indexOf(tag);
+    if (idx !== -1 && (firstEnd === -1 || idx < firstEnd)) {
+      firstEnd = idx;
+      tagLen = tag.length;
+    }
+  }
+  if (firstEnd === -1) return `${imageTag}\n${contentHtml}`;
   return (
-    contentHtml.substring(0, firstBlockEnd + tagLength) +
+    contentHtml.substring(0, firstEnd + tagLen) +
     "\n" +
     imageTag +
     "\n" +
-    contentHtml.substring(firstBlockEnd + tagLength)
+    contentHtml.substring(firstEnd + tagLen)
   );
 }
 
@@ -129,12 +128,14 @@ export default function ZTTeamGeneratePage() {
   const [selected, setSelected] = useState<ZTTeamArticle | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [scriptData, setScriptData] = useState<ZTTeamScriptData | null>(null);
-  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [generatedAudio, setGeneratedAudio] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<number | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
+  const [enableScript, setEnableScript] = useState(false);
+  const [enableAudio, setEnableAudio] = useState(false);
   const audioRef = useRef<string | null>(null);
   const audioPathRef = useRef<string | null>(null);
   const imagePathRef = useRef<string | null>(null);
@@ -171,7 +172,7 @@ export default function ZTTeamGeneratePage() {
   const ztteam_handleSelect = (article: ZTTeamArticle) => {
     setSelected(article);
     setScriptData(null);
-    setGeneratedImage(null);
+    setUploadedImage(null);
     setGeneratedAudio(null);
     setError(null);
     setSavedId(null);
@@ -180,16 +181,49 @@ export default function ZTTeamGeneratePage() {
     imagePathRef.current = null;
   };
 
+  /** Xử lý upload ảnh từ file */
+  const ztteam_handleImageUpload = async (file: File) => {
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const base64 = reader.result as string;
+      setUploadedImage(base64);
+      /** Lưu ảnh xuống file ngay */
+      const saveRes = await fetch("/api/save-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: base64,
+          articleId: selected?.id,
+        }),
+      });
+      const saveJson = await saveRes.json();
+      if (saveJson.success) {
+        imagePathRef.current = saveJson.imagePath;
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  /** Xử lý paste ảnh từ clipboard */
+  const ztteam_handlePaste = async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) await ztteam_handleImageUpload(file);
+        break;
+      }
+    }
+  };
+
   /** Generate */
   const ztteam_handleGenerate = async () => {
     if (!selected) return;
     setIsGenerating(true);
     setError(null);
     setScriptData(null);
-    setGeneratedImage(null);
     setGeneratedAudio(null);
     audioPathRef.current = null;
-    imagePathRef.current = null;
 
     try {
       const { GoogleGenAI, Type, Modality } = await import("@google/genai");
@@ -197,9 +231,10 @@ export default function ZTTeamGeneratePage() {
         apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY || "",
       });
 
-      /** Step 1: Script */
-      const scriptResponse = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+      /** Step 1: Script (Có tự động retry khi bị 503 High Demand và fallback sang gemini-2.0-flash / 1.5-flash) */
+      const { response: scriptResponse, modelUsed } = await ztteam_generateContentWithRetry(ai, {
+        primaryModel: "gemini-2.5-flash",
+        fallbackModels: ["gemini-2.0-flash", "gemini-1.5-flash"],
         contents: {
           parts: [{ text: `Nội dung yêu cầu: ${selected.content_original}` }],
         },
@@ -214,10 +249,10 @@ Yêu cầu kịch bản video (Script):
 2. ĐƯA THÔNG TIN CHÍNH LÊN ĐẦU: Nội dung quan trọng nhất, tin tức cốt lõi phải được trình bày ngay lập tức.
 3. Câu mở đầu PHẢI có HOOK gây chú ý mạnh trong 3 giây đầu (như một Breaking News) và đi thẳng vào vấn đề chính.
 4. Tổng thời lượng đọc kịch bản dưới 60 giây (khoảng 100-130 từ).
-5. Chỉ trả về nội dung voice-over liền mạch.
+5. Chỉ trả về nội dung voice-over liền mạch. ${enableScript ? "" : "(LƯU Ý: Người dùng KHÔNG yêu cầu Script voice-over, hãy để giá trị thuộc tính script là chuỗi rỗng \"\")"}
 
 Yêu cầu bài đăng Fanpage (Social Post):
-1. ĐƯA CHỦ ĐỀ CHÍNH LÊN ĐẦU TIÊN: Dòng đầu tiên của bài đăng PHẢI LÀ 1 dòng duy nhất nêu bật chủ đề chính của nội dung.
+1. ĐƯA CHỦ ĐỀ CHÍNH LÊN ĐẦU TIÊN: Dòng đầu tiên của bài đăng PHẢI LÀ 1 dòng duy nhất nêu bật chủ đề chính của nội dung, Lưu ý: Nếu có nhân vật chính hãy ưu tiên đưa lên dòng đầu tiên, LUÔN VIẾT HOA DÒNG NÀY VÀ PHẢI XUỐNG DÒNG, THÊM ICON PHÙ HỢP VÀO ĐẦU DÒNG.
 2. Viết một bài đăng hấp dẫn để đăng kèm video trên Facebook Fanpage/Instagram/TikTok.
 3. Bao gồm tiêu đề thu hút, nội dung tóm tắt giá trị của video, lời kêu gọi hành động (CTA) và các hashtag phù hợp.
 4. Sử dụng emoji hợp lý để tăng tương tác.
@@ -226,6 +261,11 @@ Yêu cầu bài đăng Fanpage (Social Post):
 Yêu cầu về Tiêu đề hình ảnh (Large Title & Small Title):
 1. Large Title: Một tiêu đề cực kỳ ngắn gọn (2-4 từ), gây sốc hoặc tóm tắt nội dung chính (ví dụ: "BREAKING NEWS", "MARKET CRASH", "NEW DISCOVERY").
 2. Small Title: Một dòng mô tả ngắn (4-7 từ) bổ sung cho Large Title.
+
+Yêu cầu về Câu Hook Video (Hook Text ~50 từ):
+1. Viết một đoạn Hook bằng Tiếng Anh khoảng 45-55 từ (~50 từ).
+2. Phong cách Breaking News kích thích tò mò tột độ, tạo sự lấp lửng/bỏ ngỏ (cliffhanger).
+3. Khiến người xem sau khi đọc xong bắt buộc phải click vào link bài viết bên dưới để tìm câu trả lời.
 
 Yêu cầu về Tiêu đề bài viết (Title):
 1. Dựa trên tiêu đề gốc của bài, viết lại bằng Tiếng Anh theo phong cách clickbait news.
@@ -252,7 +292,7 @@ Yêu cầu nội dung bài viết web (Content New):
               script: {
                 type: Type.STRING,
                 description:
-                  "Toàn bộ nội dung voice-over liền mạch bằng Tiếng Anh, phong cách bản tin thời sự.",
+                  "Toàn bộ nội dung voice-over liền mạch bằng Tiếng Anh, phong cách bản tin thời sự. Để rỗng \"\" nếu người dùng không chọn tạo script.",
               },
               socialPost: {
                 type: Type.STRING,
@@ -267,6 +307,11 @@ Yêu cầu nội dung bài viết web (Content New):
                 type: Type.STRING,
                 description: "Tiêu đề nhỏ cho hình ảnh (4-7 từ, Tiếng Anh)",
               },
+              hookText: {
+                type: Type.STRING,
+                description:
+                  "Đoạn Hook video dài khoảng 45-55 từ (~50 từ) bằng Tiếng Anh. Phong cách Breaking News kích thích tò mò cực độ, tạo lấp lửng (cliffhanger) để hối thúc người xem click vào link bài viết bên dưới.",
+              },
               contentNew: {
                 type: Type.STRING,
                 description:
@@ -279,6 +324,7 @@ Yêu cầu nội dung bài viết web (Content New):
               "socialPost",
               "largeTitle",
               "smallTitle",
+              "hookText",
               "contentNew",
             ],
           },
@@ -288,205 +334,121 @@ Yêu cầu nội dung bài viết web (Content New):
       const parsedScript = JSON.parse(
         scriptResponse.text || "{}",
       ) as ZTTeamScriptData;
+
+      if (!enableScript) {
+        parsedScript.script = "";
+      }
+
       setScriptData(parsedScript);
 
-      /** Step 2: Image + Audio parallel */
-      const promises: Promise<void>[] = [];
       /** Log script generation */
       const scriptUsage = scriptResponse.usageMetadata;
       await ztteam_logApiUsage({
         article_id: selected.id,
-        model: "gemini-2.5-flash",
+        model: modelUsed,
         type: "script",
         input_tokens: scriptUsage?.promptTokenCount || 0,
         output_tokens: scriptUsage?.candidatesTokenCount || 0,
       });
 
-      /** Generate image */
-      if (selected.image_original) {
-        promises.push(
-          (async () => {
-            try {
-              const imgRes = await fetch(
-                `/api/proxy-image?url=${encodeURIComponent(selected.image_original!)}`,
-              );
-              const imgBlob = await imgRes.blob();
-              const base64 = await new Promise<string>((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () =>
-                  resolve((reader.result as string).split(",")[1]);
-                reader.readAsDataURL(imgBlob);
-              });
-
-              const imageResponse = await ai.models.generateContent({
-                model: "gemini-2.5-flash-image",
-                contents: {
-                  parts: [
-                    { inlineData: { data: base64, mimeType: imgBlob.type } },
-                    {
-                      text: `Redraw this image to be beautiful and sharp.
-- Change the background to a professional news studio setting.
-- Change the background color to a vibrant news-style theme (blue/red/white).
-- Change the character's clothes to a professional news anchor suit.
-- Add a professional 'BREAKING NEWS' graphic frame.
-- CRITICAL: REMOVE ALL EXISTING LOGOS, TEXT, AND WATERMARKS FROM THE ORIGINAL IMAGE.
-- Add a prominent news-style title overlay.
-- CRITICAL: The image must fill the entire 1:1 canvas completely. Do not leave any white space, borders, or padding around the image. The background must be fully covered.
-- The large title text should be: "${parsedScript.largeTitle}".
-- The small title text should be: "${parsedScript.smallTitle}".
-- IMPORTANT: Place all text and titles in the UPPER HALF or MIDDLE of the image. Keep the BOTTOM 25% of the image COMPLETELY CLEAR of any text or important graphics to allow space for video subtitles later.
-- Ensure the text is clear, professional, and readable.
-- The overall style should be high-quality, professional news broadcast.`,
-                    },
-                  ],
+      /** Generate audio (chỉ khi người dùng chọn tích enableAudio và có kịch bản) */
+      if (enableAudio && parsedScript.script) {
+        const audioResponse = await ai.models.generateContent({
+          model: "gemini-2.5-flash-preview-tts",
+          contents: [
+            {
+              parts: [
+                {
+                  text: `Say professionally like a news anchor: ${parsedScript.script}`,
                 },
-                config: {
-                  imageConfig: {
-                    aspectRatio: "1:1",
-                  },
-                },
-              });
-
-              for (const part of imageResponse.candidates?.[0]?.content
-                ?.parts || []) {
-                if (part.inlineData) {
-                  const base64Image = `data:image/png;base64,${part.inlineData.data}`;
-                  setGeneratedImage(base64Image);
-
-                  const saveImgRes = await fetch("/api/save-image", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      imageBase64: base64Image,
-                      articleId: selected.id,
-                    }),
-                  });
-                  const saveImgJson = await saveImgRes.json();
-                  if (saveImgJson.success) {
-                    imagePathRef.current = saveImgJson.imagePath;
-                    /** Log image generation */
-                    const imgUsage = imageResponse.usageMetadata;
-                    await ztteam_logApiUsage({
-                      article_id: selected.id,
-                      model: "gemini-2.5-flash-image",
-                      type: "image",
-                      input_tokens: imgUsage?.promptTokenCount || 0,
-                      output_tokens: imgUsage?.candidatesTokenCount || 0,
-                    });
-                  }
-                  break;
-                }
-              }
-            } catch (imgErr) {
-              console.error("Image generation failed:", imgErr);
-            }
-          })(),
-        );
-      }
-
-      /** Generate audio */
-      promises.push(
-        (async () => {
-          const audioResponse = await ai.models.generateContent({
-            model: "gemini-2.5-flash-preview-tts",
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `Say professionally like a news anchor: ${parsedScript.script}`,
-                  },
-                ],
-              },
-            ],
-            config: {
-              responseModalities: [Modality.AUDIO],
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: { voiceName: "Zephyr" },
-                },
+              ],
+            },
+          ],
+          config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: "Zephyr" },
               },
             },
-          });
+          },
+        });
 
-          const base64Audio =
-            audioResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData
-              ?.data;
-          if (base64Audio) {
-            const binaryString = window.atob(base64Audio);
-            const len = binaryString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
-
-            const sampleRate = 24000;
-            const numChannels = 1;
-            const bitsPerSample = 16;
-            const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-            const blockAlign = numChannels * (bitsPerSample / 8);
-            const wavHeader = new ArrayBuffer(44);
-            const view = new DataView(wavHeader);
-
-            view.setUint8(0, 0x52);
-            view.setUint8(1, 0x49);
-            view.setUint8(2, 0x46);
-            view.setUint8(3, 0x46);
-            view.setUint32(4, 36 + len, true);
-            view.setUint8(8, 0x57);
-            view.setUint8(9, 0x41);
-            view.setUint8(10, 0x56);
-            view.setUint8(11, 0x45);
-            view.setUint8(12, 0x66);
-            view.setUint8(13, 0x6d);
-            view.setUint8(14, 0x74);
-            view.setUint8(15, 0x20);
-            view.setUint32(16, 16, true);
-            view.setUint16(20, 1, true);
-            view.setUint16(22, numChannels, true);
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, byteRate, true);
-            view.setUint16(32, blockAlign, true);
-            view.setUint16(34, bitsPerSample, true);
-            view.setUint8(36, 0x64);
-            view.setUint8(37, 0x61);
-            view.setUint8(38, 0x74);
-            view.setUint8(39, 0x61);
-            view.setUint32(40, len, true);
-
-            const blob = new Blob([wavHeader, bytes], { type: "audio/wav" });
-            const audioUrl = URL.createObjectURL(blob);
-            if (audioRef.current) URL.revokeObjectURL(audioRef.current);
-            audioRef.current = audioUrl;
-            setGeneratedAudio(audioUrl);
-
-            const saveRes = await fetch("/api/save-audio", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                audioBase64: base64Audio,
-                articleId: selected.id,
-              }),
-            });
-            const saveJson = await saveRes.json();
-            if (saveJson.success) {
-              audioPathRef.current = saveJson.audioPath;
-              /** Log audio generation */
-              const audioUsage = audioResponse.usageMetadata;
-              await ztteam_logApiUsage({
-                article_id: selected.id,
-                model: "gemini-2.5-flash-preview-tts",
-                type: "audio",
-                input_tokens: audioUsage?.promptTokenCount || 0,
-                output_tokens: audioUsage?.candidatesTokenCount || 0,
-              });
-            }
+        const base64Audio =
+          audioResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (base64Audio) {
+          const binaryString = window.atob(base64Audio);
+          const len = binaryString.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
           }
-        })(),
-      );
 
-      await Promise.all(promises);
+          const sampleRate = 24000;
+          const numChannels = 1;
+          const bitsPerSample = 16;
+          const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+          const blockAlign = numChannels * (bitsPerSample / 8);
+          const wavHeader = new ArrayBuffer(44);
+          const view = new DataView(wavHeader);
+
+          view.setUint8(0, 0x52);
+          view.setUint8(1, 0x49);
+          view.setUint8(2, 0x46);
+          view.setUint8(3, 0x46);
+          view.setUint32(4, 36 + len, true);
+          view.setUint8(8, 0x57);
+          view.setUint8(9, 0x41);
+          view.setUint8(10, 0x56);
+          view.setUint8(11, 0x45);
+          view.setUint8(12, 0x66);
+          view.setUint8(13, 0x6d);
+          view.setUint8(14, 0x74);
+          view.setUint8(15, 0x20);
+          view.setUint32(16, 16, true);
+          view.setUint16(20, 1, true);
+          view.setUint16(22, numChannels, true);
+          view.setUint32(24, sampleRate, true);
+          view.setUint32(28, byteRate, true);
+          view.setUint16(32, blockAlign, true);
+          view.setUint16(34, bitsPerSample, true);
+          view.setUint8(36, 0x64);
+          view.setUint8(37, 0x61);
+          view.setUint8(38, 0x74);
+          view.setUint8(39, 0x61);
+          view.setUint32(40, len, true);
+
+          const blob = new Blob([wavHeader, bytes], { type: "audio/wav" });
+          const audioUrl = URL.createObjectURL(blob);
+          if (audioRef.current) URL.revokeObjectURL(audioRef.current);
+          audioRef.current = audioUrl;
+          setGeneratedAudio(audioUrl);
+
+          const saveRes = await fetch("/api/save-audio", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              audioBase64: base64Audio,
+              articleId: selected.id,
+            }),
+          });
+          const saveJson = await saveRes.json();
+          if (saveJson.success) {
+            audioPathRef.current = saveJson.audioPath;
+            /** Log audio generation */
+            const audioUsage = audioResponse.usageMetadata;
+            await ztteam_logApiUsage({
+              article_id: selected.id,
+              model: "gemini-2.5-flash-preview-tts",
+              type: "audio",
+              input_tokens: audioUsage?.promptTokenCount || 0,
+              output_tokens: audioUsage?.candidatesTokenCount || 0,
+            });
+          }
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Có lỗi xảy ra");
+      setError(ztteam_formatGeminiError(err));
     } finally {
       setIsGenerating(false);
     }
@@ -506,13 +468,14 @@ Yêu cầu nội dung bài viết web (Content New):
             title_new: scriptData.title,
             script: scriptData.script,
             social_post: scriptData.socialPost,
-            image_new: imagePathRef.current || generatedImage || null,
+            image_new: imagePathRef.current || null,
             audio_path: audioPathRef.current || null,
             large_title: scriptData.largeTitle || null,
             small_title: scriptData.smallTitle || null,
+            hook_text: scriptData.hookText || null,
             content_new: ztteam_buildContentNew(
               scriptData.contentNew || "",
-              imagePathRef.current || generatedImage || null,
+              imagePathRef.current || null,
             ),
           },
         }),
@@ -523,7 +486,7 @@ Yêu cầu nội dung bài viết web (Content New):
         await ztteam_fetchPending();
         setSelected(null);
         setScriptData(null);
-        setGeneratedImage(null);
+        setUploadedImage(null);
         setGeneratedAudio(null);
       }
     } finally {
@@ -637,24 +600,55 @@ Yêu cầu nội dung bài viết web (Content New):
                   )
                 }
                 generated={
-                  generatedImage ? (
-                    <img
-                      src={generatedImage}
-                      alt="Generated"
-                      className="w-full aspect-video object-contain rounded-lg"
-                    />
-                  ) : isGenerating ? (
-                    <div className="w-full aspect-video bg-slate-800 rounded-lg flex flex-col items-center justify-center gap-2">
-                      <div className="w-6 h-6 border-2 border-slate-600 border-t-purple-400 rounded-full animate-spin" />
-                      <p className="text-xs text-slate-500">Đang tạo ảnh...</p>
+                  <div
+                    onPaste={ztteam_handlePaste}
+                    className="flex flex-col gap-2"
+                  >
+                    {uploadedImage ? (
+                      <img
+                        src={uploadedImage}
+                        alt="Uploaded"
+                        className="w-full aspect-video object-contain rounded-lg"
+                      />
+                    ) : (
+                      <div className="w-full aspect-video bg-slate-800 rounded-lg flex flex-col items-center justify-center gap-2 border-2 border-dashed border-slate-700">
+                        <span className="material-symbols-outlined text-slate-500 text-3xl">
+                          upload
+                        </span>
+                        <p className="text-xs text-slate-500 text-center px-4">
+                          Upload hoặc Paste ảnh vào đây
+                        </p>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <label className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold cursor-pointer transition-colors">
+                        <span className="material-symbols-outlined text-sm">
+                          upload_file
+                        </span>
+                        Chọn file
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) ztteam_handleImageUpload(file);
+                          }}
+                        />
+                      </label>
+                      {uploadedImage && (
+                        <button
+                          onClick={() => {
+                            setUploadedImage(null);
+                            imagePathRef.current = null;
+                          }}
+                          className="px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-xs font-semibold transition-colors"
+                        >
+                          Xóa
+                        </button>
+                      )}
                     </div>
-                  ) : (
-                    <div className="w-full aspect-video bg-slate-800 rounded-lg flex items-center justify-center">
-                      <span className="material-symbols-outlined text-slate-600">
-                        auto_awesome
-                      </span>
-                    </div>
-                  )
+                  </div>
                 }
               />
 
@@ -753,6 +747,7 @@ Yêu cầu nội dung bài viết web (Content New):
                   </p>
                 )}
               </ZTTeamCard>
+
               {/** Content mới */}
               <ZTTeamCard
                 title="Nội dung bài viết web"
@@ -776,6 +771,42 @@ Yêu cầu nội dung bài viết web (Content New):
                   ⚠️ {error}
                 </div>
               )}
+
+              {/** Checkbox tùy chọn AI Generate */}
+              <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-wrap items-center justify-between gap-4">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  Tùy chọn tạo thêm
+                </p>
+                <div className="flex items-center gap-5">
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableScript}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setEnableScript(checked);
+                        if (!checked) setEnableAudio(false);
+                      }}
+                      className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-[#1337ec] focus:ring-[#1337ec] cursor-pointer"
+                    />
+                    <span>🎙️ Kịch bản Voice-over</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableAudio}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setEnableAudio(checked);
+                        if (checked) setEnableScript(true);
+                      }}
+                      className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-[#1337ec] focus:ring-[#1337ec] cursor-pointer"
+                    />
+                    <span>🔊 Audio Voice-over (TTS)</span>
+                  </label>
+                </div>
+              </div>
 
               {/** Actions */}
               <div className="flex gap-3">

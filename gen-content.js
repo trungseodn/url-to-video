@@ -1,10 +1,10 @@
-﻿const Database = require('better-sqlite3');
+const Database = require('better-sqlite3');
 const { GoogleGenAI } = require('@google/genai');
 
 const db = new Database('D:/projects/ztteam-pipeline.db');
 const article = db.prepare('SELECT * FROM ztteam_articles WHERE id = 2').get();
 
-const ai = new GoogleGenAI({ apiKey: 'AIzaSyCgVPHM-nitImjZdXCFPzsAQQskbmF9EsU' });
+const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '' });
 
 async function run() {
   const response = await ai.models.generateContent({

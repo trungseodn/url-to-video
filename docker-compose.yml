@@ -1,0 +1,27 @@
+services:
+  ztteam-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ztteam-url-fetcher
+    restart: unless-stopped
+    ports:
+      - "3005:3000"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3072M
+    volumes:
+      - ./data:/app/data
+      - ./public/images:/app/public/images
+      - ./public/videos:/app/public/videos
+      - ./public/audio:/app/public/audio
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - CHROME_PATH=/usr/bin/chromium
+      - FFMPEG_PATH=/usr/bin/ffmpeg
+      - DB_PATH=/app/data/ztteam-pipeline.db
