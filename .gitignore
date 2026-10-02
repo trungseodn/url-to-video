@@ -42,14 +42,12 @@ data/
 *.db-wal
 
 # generated & temporary media files (prevent bloated git repo)
-public/images/preview/*
-public/images/temp/*
-public/images/url-video/*
-public/images/collages/*
-public/images/image-*
+public/images/*
+!public/images/.gitkeep
 public/videos/*
 !public/videos/.gitkeep
-public/audio/custom/*
+public/audio/*.wav
+public/effects/*
 
 # vercel
 .vercel
