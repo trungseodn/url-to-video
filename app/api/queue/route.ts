@@ -4,6 +4,7 @@ import {
   ztteam_insertArticle,
   ztteam_checkUrlExists,
   ztteam_countByStatus,
+  ztteam_deleteAllArticles,
 } from "@/lib/database";
 
 /** GET /api/queue - Lấy tất cả articles + stats */
@@ -61,6 +62,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ success: true, data: article }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Có lỗi xảy ra";
+    return NextResponse.json(
+      { success: false, error: message },
+      { status: 500 },
+    );
+  }
+}
+
+/** DELETE /api/queue - Xóa sạch tất cả articles và logs về 0 */
+export async function DELETE(): Promise<NextResponse> {
+  try {
+    ztteam_deleteAllArticles();
+    return NextResponse.json({
+      success: true,
+      message: "Đã xóa sạch toàn bộ bài viết, reset tất cả chỉ số về 0",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Có lỗi xảy ra khi xóa";
     return NextResponse.json(
       { success: false, error: message },
       { status: 500 },

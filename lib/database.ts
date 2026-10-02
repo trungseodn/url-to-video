@@ -436,5 +436,16 @@ export function ztteam_deleteWpSite(id: number): boolean {
   return result.changes > 0;
 }
 
+/** Xóa sạch toàn bộ articles và api logs, reset sequence về 0 */
+export function ztteam_deleteAllArticles(): boolean {
+  db.exec(`
+    DELETE FROM ztteam_api_logs;
+    DELETE FROM ztteam_articles;
+    DELETE FROM sqlite_sequence WHERE name IN ('ztteam_articles', 'ztteam_api_logs');
+    VACUUM;
+  `);
+  return true;
+}
+
 /** Export database instance */
 export default db;

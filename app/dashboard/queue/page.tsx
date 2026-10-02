@@ -206,6 +206,7 @@ export default function ZTTeamQueuePage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [clearingAll, setClearingAll] = useState(false);
   const [selected, setSelected] = useState<ZTTeamArticle | null>(null);
 
   /** Fetch danh sách articles */
@@ -238,6 +239,32 @@ export default function ZTTeamQueuePage() {
     }
   };
 
+  const ztteam_handleDeleteAll = async () => {
+    if (
+      !confirm(
+        "CẢNH BÁO: Hành động này sẽ xóa sạch TOÀN BỘ bài viết và nhật ký trong pipeline về 0 để bắt đầu lại từ đầu!\nBạn có chắc chắn muốn xóa không?"
+      )
+    ) {
+      return;
+    }
+    setClearingAll(true);
+    try {
+      const res = await fetch("/api/queue", { method: "DELETE" });
+      const json = await res.json();
+      if (json.success) {
+        alert("Đã xóa sạch toàn bộ bài viết, đưa các chỉ số về 0!");
+        await ztteam_fetchArticles();
+      } else {
+        alert("Lỗi: " + (json.error || "Không thể xóa"));
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Lỗi kết nối";
+      alert("Lỗi kết nối: " + msg);
+    } finally {
+      setClearingAll(false);
+    }
+  };
+
   /** Filter articles */
   const filteredArticles =
     filter === "all" ? articles : articles.filter((a) => a.status === filter);
@@ -259,13 +286,25 @@ export default function ZTTeamQueuePage() {
           <h2 className="text-3xl font-black tracking-tight mb-1">Queue</h2>
           <p className="text-slate-400">Danh sách bài viết trong pipeline</p>
         </div>
-        <button
-          onClick={ztteam_fetchArticles}
-          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-semibold transition-colors"
-        >
-          <span className="material-symbols-outlined text-sm">refresh</span>
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={ztteam_fetchArticles}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-semibold transition-colors"
+          >
+            <span className="material-symbols-outlined text-sm">refresh</span>
+            Refresh
+          </button>
+          {articles.length > 0 && (
+            <button
+              onClick={ztteam_handleDeleteAll}
+              disabled={clearingAll}
+              className="flex items-center gap-2 px-4 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 rounded-lg text-sm font-semibold transition-colors"
+            >
+              <span className="material-symbols-outlined text-sm">delete_sweep</span>
+              {clearingAll ? "Đang xóa..." : "Xóa tất cả (Reset về 0)"}
+            </button>
+          )}
+        </div>
       </header>
 
       {/** Filter Tabs */}

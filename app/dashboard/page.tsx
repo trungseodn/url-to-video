@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { ztteam_countByStatus, ztteam_getApiStats } from "@/lib/database";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 /** Stats Card Component */
 function ZTTeamStatCard({
   icon,
