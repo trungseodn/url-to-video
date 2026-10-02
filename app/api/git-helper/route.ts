@@ -1,59 +1,61 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { exec } from "child_process";
 import { promisify } from "util";
+import fs from "fs";
+import path from "path";
 
 const execAsync = promisify(exec);
+export const dynamic = "force-dynamic";
 
-export async function GET() {
+const GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "trungseodn",
+  GIT_AUTHOR_EMAIL: "trungseodn@gmail.com",
+  GIT_COMMITTER_NAME: "trungseodn",
+  GIT_COMMITTER_EMAIL: "trungseodn@gmail.com",
+};
+
+export async function GET(req: NextRequest) {
   const logs: string[] = [];
   try {
-    logs.push("=== 1. GIT STATUS ===");
-    const { stdout: s1, stderr: e1 } = await execAsync("git status", { cwd: process.cwd() });
-    logs.push(s1 || e1);
+    // Delete next.config.ts in favor of next.config.mjs
+    const oldTsConfig = path.join(process.cwd(), "next.config.ts");
+    if (fs.existsSync(oldTsConfig)) {
+      fs.unlinkSync(oldTsConfig);
+      logs.push("Deleted next.config.ts");
+    }
 
-    logs.push("=== 2. GIT REMOTE ===");
-    const { stdout: s2 } = await execAsync("git remote -v", { cwd: process.cwd() });
-    logs.push(s2);
+    logs.push("=== 1. GIT ADD . ===");
+    const { stdout: s1 } = await execAsync("git add .", { cwd: process.cwd() });
+    logs.push(s1 || "git add done");
 
-    logs.push("=== 3. GIT ADD ===");
-    const { stdout: s3 } = await execAsync("git add .", { cwd: process.cwd() });
-    logs.push(s3 || "git add . done");
-
-    logs.push("=== 4. GIT COMMIT ===");
+    logs.push("=== 2. GIT COMMIT ===");
     try {
-      const { stdout: s4, stderr: e4 } = await execAsync(
-        'git commit -m "feat: complete url-to-video studio, image paste, font zoom and vps deployment setup"',
-        { cwd: process.cwd() }
+      const { stdout: s2, stderr: e2 } = await execAsync(
+        'git commit -m "fix: install devDependencies during docker build and use next.config.mjs"',
+        { cwd: process.cwd(), env: GIT_ENV }
       );
-      logs.push(s4 || e4);
-    } catch (commitErr: any) {
-      logs.push("Commit note: " + (commitErr.stdout || commitErr.message));
+      logs.push(s2 || e2);
+    } catch (cErr: any) {
+      logs.push("Commit result: " + (cErr.stdout || cErr.stderr || cErr.message));
     }
 
-    logs.push("=== 5. GIT BRANCH -M MAIN ===");
+    logs.push("=== 3. GIT PUSH ===");
     try {
-      const { stdout: s5 } = await execAsync("git branch -M main", { cwd: process.cwd() });
-      logs.push(s5 || "branch set to main");
-    } catch (bErr: any) {
-      logs.push("Branch note: " + bErr.message);
-    }
-
-    logs.push("=== 6. GIT PUSH ===");
-    try {
-      const { stdout: s6, stderr: e6 } = await execAsync("git push -u origin main", {
+      const { stdout: s3, stderr: e3 } = await execAsync("git push -u origin main", {
         cwd: process.cwd(),
-        timeout: 20000,
+        timeout: 40000,
+        env: GIT_ENV,
       });
-      logs.push("Push SUCCESS:");
-      logs.push(s6 || e6);
+      logs.push("PUSH SUCCESS:\n" + (s3 || e3));
       return NextResponse.json({ success: true, logs });
-    } catch (pushErr: any) {
-      logs.push("Push FAILED / PENDING AUTH:");
-      logs.push(pushErr.stderr || pushErr.stdout || pushErr.message);
-      return NextResponse.json({ success: false, logs, pushError: pushErr.message });
+    } catch (pErr: any) {
+      const out = pErr.stderr || pErr.stdout || pErr.message;
+      logs.push("PUSH OUTPUT:\n" + out);
+      return NextResponse.json({ success: false, logs, pushError: out });
     }
   } catch (err: any) {
-    logs.push("Fatal error: " + err.message);
+    logs.push("Error: " + err.message);
     return NextResponse.json({ success: false, logs, error: err.message }, { status: 500 });
   }
 }

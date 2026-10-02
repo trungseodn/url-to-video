@@ -18,15 +18,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Biến môi trường hệ thống
-ENV NODE_ENV=production \
-    PORT=3000 \
+ENV PORT=3000 \
     CHROME_PATH=/usr/bin/chromium \
     FFMPEG_PATH=/usr/bin/ffmpeg \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
-# Copy package specs và cài đặt dependencies
+# Copy package specs và cài đặt toàn bộ dependencies (kể cả devDependencies để build)
 COPY package*.json ./
-RUN npm install
+RUN npm install --include=dev
 
 # Copy source code
 COPY . .
@@ -36,6 +35,9 @@ RUN mkdir -p /app/data /app/public/images /app/public/videos /app/public/audio
 
 # Build ứng dụng Next.js
 RUN npm run build
+
+# Thiết lập production mode sau khi đã build xong
+ENV NODE_ENV=production
 
 # Expose port Next.js
 EXPOSE 3000
