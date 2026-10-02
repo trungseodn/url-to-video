@@ -413,7 +413,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         lineHeight,
         linesCount: lines.length,
         lines,
-        browserPath: EDGE_PATH,
+        browserPath: getBrowserExecutablePath() || "",
       },
     });
   } catch (error) {

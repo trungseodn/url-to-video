@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exec } from "child_process";
 import { promisify } from "util";
-import fs from "fs";
-import path from "path";
 
 const execAsync = promisify(exec);
 export const dynamic = "force-dynamic";
@@ -18,21 +16,18 @@ const GIT_ENV = {
 export async function GET(req: NextRequest) {
   const logs: string[] = [];
   try {
-    // Delete next.config.ts in favor of next.config.mjs
-    const oldTsConfig = path.join(process.cwd(), "next.config.ts");
-    if (fs.existsSync(oldTsConfig)) {
-      fs.unlinkSync(oldTsConfig);
-      logs.push("Deleted next.config.ts");
-    }
+    logs.push("=== 1. GIT STATUS BEFORE ===");
+    const { stdout: s0 } = await execAsync("git status --short", { cwd: process.cwd() });
+    logs.push(s0);
 
-    logs.push("=== 1. GIT ADD . ===");
+    logs.push("=== 2. GIT ADD . ===");
     const { stdout: s1 } = await execAsync("git add .", { cwd: process.cwd() });
     logs.push(s1 || "git add done");
 
-    logs.push("=== 2. GIT COMMIT ===");
+    logs.push("=== 3. GIT COMMIT ===");
     try {
       const { stdout: s2, stderr: e2 } = await execAsync(
-        'git commit -m "fix: install devDependencies during docker build and use next.config.mjs"',
+        'git commit -m "fix(ts): fix EDGE_PATH, cheerio unwrap and parameter types for clean build"',
         { cwd: process.cwd(), env: GIT_ENV }
       );
       logs.push(s2 || e2);
@@ -40,9 +35,9 @@ export async function GET(req: NextRequest) {
       logs.push("Commit result: " + (cErr.stdout || cErr.stderr || cErr.message));
     }
 
-    logs.push("=== 3. GIT PUSH ===");
+    logs.push("=== 4. GIT PUSH ===");
     try {
-      const { stdout: s3, stderr: e3 } = await execAsync("git push -u origin main", {
+      const { stdout: s3, stderr: e3 } = await execAsync("git push origin main", {
         cwd: process.cwd(),
         timeout: 40000,
         env: GIT_ENV,

@@ -207,14 +207,16 @@ export async function ztteam_cleanHtml(
 ): Promise<string> {
   if (!rawHtml) return "";
 
-  const $ = cheerio.load(rawHtml, null, false);
+  const $ = cheerio.load(rawHtml);
 
   /** Loại bỏ script, style, iframe, form, button không cần thiết */
   $("script, style, iframe, form, button, input, noscript, svg").remove();
 
   /** Bỏ hoàn toàn tất cả thẻ div bằng cách unwrap nội dung bên trong */
   while ($("div").length > 0) {
-    $("div").contents().unwrap();
+    $("div").each((_, el) => {
+      $(el).replaceWith($(el).contents());
+    });
   }
 
   interface ImgTarget {
@@ -285,7 +287,9 @@ export async function ztteam_cleanHtml(
 
   /** 1. Bóc tách (unwrap) tất cả các thẻ <a>: Giữ lại toàn bộ văn bản và hình ảnh bên trong, chỉ gỡ bỏ thẻ <a> (link out) */
   while ($("a").length > 0) {
-    $("a").contents().unwrap();
+    $("a").each((_, el) => {
+      $(el).replaceWith($(el).contents());
+    });
   }
 
   /** 2. Quét và xóa các thẻ chú thích dẫn nguồn hoặc xem thêm (chỉ áp dụng cho đoạn văn ngắn < 150 ký tự) */

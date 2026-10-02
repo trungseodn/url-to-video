@@ -631,7 +631,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let insetImagePath: string | undefined;
     if (insetImageUrl && typeof insetImageUrl === "string" && insetImageUrl.trim()) {
       const targetInsetUrl = insetImageUrl.trim();
-      const matchIdx = images.findIndex((img) => img && typeof img === "string" && img.trim() === targetInsetUrl);
+      const matchIdx = images.findIndex((img: any) => img && typeof img === "string" && img.trim() === targetInsetUrl);
       if (matchIdx !== -1 && localImages[matchIdx]) {
         insetImagePath = localImages[matchIdx];
       } else {
