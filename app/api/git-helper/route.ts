@@ -14,43 +14,33 @@ const GIT_ENV = {
 };
 
 export async function GET(req: NextRequest) {
-  const logs: string[] = [];
   try {
-    logs.push("=== 1. GIT STATUS BEFORE ===");
-    const { stdout: s0 } = await execAsync("git status --short", { cwd: process.cwd() });
-    logs.push(s0);
-
-    logs.push("=== 2. GIT ADD . ===");
-    const { stdout: s1 } = await execAsync("git add .", { cwd: process.cwd() });
-    logs.push(s1 || "git add done");
-
-    logs.push("=== 3. GIT COMMIT ===");
+    const s0 = await execAsync("git status --short", { cwd: process.cwd() });
+    const s1 = await execAsync("git add -A", { cwd: process.cwd() });
+    const s2 = await execAsync("git status --short", { cwd: process.cwd() });
+    let commitMsg = "";
     try {
-      const { stdout: s2, stderr: e2 } = await execAsync(
-        'git commit -m "fix(ts): fix EDGE_PATH, cheerio unwrap and parameter types for clean build"',
-        { cwd: process.cwd(), env: GIT_ENV }
-      );
-      logs.push(s2 || e2);
-    } catch (cErr: any) {
-      logs.push("Commit result: " + (cErr.stdout || cErr.stderr || cErr.message));
-    }
-
-    logs.push("=== 4. GIT PUSH ===");
-    try {
-      const { stdout: s3, stderr: e3 } = await execAsync("git push origin main", {
+      const c = await execAsync('git commit -m "fix(ts): fix EDGE_PATH, cheerio unwrap and parameter types"', {
         cwd: process.cwd(),
-        timeout: 40000,
         env: GIT_ENV,
       });
-      logs.push("PUSH SUCCESS:\n" + (s3 || e3));
-      return NextResponse.json({ success: true, logs });
-    } catch (pErr: any) {
-      const out = pErr.stderr || pErr.stdout || pErr.message;
-      logs.push("PUSH OUTPUT:\n" + out);
-      return NextResponse.json({ success: false, logs, pushError: out });
+      commitMsg = c.stdout || c.stderr;
+    } catch (e: any) {
+      commitMsg = e.stdout || e.stderr || e.message;
     }
+    const push = await execAsync("git push origin main", {
+      cwd: process.cwd(),
+      env: GIT_ENV,
+      timeout: 40000,
+    });
+    return NextResponse.json({
+      statusBefore: s0.stdout,
+      statusAfterAdd: s2.stdout,
+      commit: commitMsg,
+      push: push.stdout || push.stderr,
+      timestamp: Date.now(),
+    });
   } catch (err: any) {
-    logs.push("Error: " + err.message);
-    return NextResponse.json({ success: false, logs, error: err.message }, { status: 500 });
+    return NextResponse.json({ error: err.message, stdout: err.stdout, stderr: err.stderr }, { status: 500 });
   }
 }
