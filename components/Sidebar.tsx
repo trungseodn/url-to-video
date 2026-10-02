@@ -56,17 +56,32 @@ export default function ZTTeamSidebar() {
       </div>
 
       {/** Footer */}
-      <div className="mt-auto p-6 border-t border-slate-800">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-[#1337ec] flex items-center justify-center">
+      <div className="mt-auto p-4 border-t border-slate-800">
+        <div className="flex items-center gap-3 bg-slate-950/60 p-2.5 rounded-2xl border border-slate-800/80">
+          <div className="w-9 h-9 rounded-xl bg-[#1337ec] flex items-center justify-center flex-shrink-0 shadow-md shadow-blue-600/30">
             <span className="material-symbols-outlined text-white text-sm">
               person
             </span>
           </div>
-          <div className="flex-1">
-            <p className="text-sm font-bold truncate">ZTTeam Admin</p>
-            <p className="text-xs text-slate-400">Pipeline Manager</p>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold truncate text-white">ZTTeam Admin</p>
+            <p className="text-[10px] text-slate-400">Đang đăng nhập</p>
           </div>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await fetch("/api/auth/logout", { method: "POST" });
+                window.location.href = "/login";
+              } catch {
+                window.location.href = "/login";
+              }
+            }}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors cursor-pointer flex-shrink-0"
+            title="Đăng xuất khỏi hệ thống"
+          >
+            <span className="material-symbols-outlined text-lg">logout</span>
+          </button>
         </div>
       </div>
     </aside>

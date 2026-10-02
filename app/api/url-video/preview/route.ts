@@ -3,7 +3,6 @@ import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { ztteam_ensureSnowEffectVideo } from "@/lib/snow-effect";
 
 import { getBrowserExecutablePath, HEADLESS_BROWSER_FLAGS } from "@/lib/browser-detector";
 
@@ -220,7 +219,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       hookText = "",
       aspectRatio = "9:16",
       badgeText = "BREAKING NEWS",
-      enableSnow = true,
       fontSize
     } = body;
 
@@ -272,25 +270,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const cardInput = cardPngPath.replace(/\\/g, "/");
     const inputArgs = [`-i "${imgInput}"`, `-i "${cardInput}"`];
 
-    if (enableSnow) {
-      let snowPath: string | null = null;
-      try {
-        snowPath = await ztteam_ensureSnowEffectVideo();
-      } catch {}
-
-      if (snowPath && fs.existsSync(snowPath)) {
-        inputArgs.push(`-ss 1.2 -i "${snowPath.replace(/\\/g, "/")}"`);
-        filterParts.push(`[v1][1:v]overlay=x=${cardX}:y=${cardY}[v_scene]`);
-        filterParts.push(
-          `[2:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[v_snow]`
-        );
-        filterParts.push(`[v_scene][v_snow]blend=all_mode=screen:all_opacity=0.88[vout]`);
-      } else {
-        filterParts.push(`[v1][1:v]overlay=x=${cardX}:y=${cardY}[vout]`);
-      }
-    } else {
-      filterParts.push(`[v1][1:v]overlay=x=${cardX}:y=${cardY}[vout]`);
-    }
+    filterParts.push(`[v1][1:v]overlay=x=${cardX}:y=${cardY}[vout]`);
 
     const filterComplex = filterParts.join(";");
     const ffmpegBin = process.env.FFMPEG_PATH || (fs.existsSync("D:/ffmpeg/bin/ffmpeg.exe") ? "D:/ffmpeg/bin/ffmpeg.exe" : "ffmpeg");

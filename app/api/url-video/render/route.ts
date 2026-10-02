@@ -4,7 +4,6 @@ import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { ztteam_ensurePresetMusicFiles } from "@/lib/music-catalog";
-import { ztteam_ensureSnowEffectVideo } from "@/lib/snow-effect";
 
 import { getBrowserExecutablePath, HEADLESS_BROWSER_FLAGS } from "@/lib/browser-detector";
 
@@ -227,7 +226,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       musicId = "news-breaking-alert",
       musicVolume = 80,
       customMusicUrl = "",
-      enableSnow = true,
       fontSize,
     } = body;
 
@@ -337,29 +335,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const slideY = isVertical ? "(980-h)/2" : "(530-h)/2";
     filterParts.push(`[0:v][v_slide]overlay=x=(1080-w)/2:y=${slideY}[v1]`);
 
-    // 2. Hiệu ứng Tuyết rơi chậm (Slow Snowfall Overlay)
-    if (enableSnow) {
-      filterParts.push(`[v1][${cardInputIdx}:v]overlay=x=${cardX}:y=${cardY}[v_scene]`);
-      let snowPath: string | null = null;
-      try {
-        snowPath = await ztteam_ensureSnowEffectVideo();
-      } catch (err) {
-        console.warn("Could not generate snow overlay:", err);
-      }
-
-      if (snowPath && fs.existsSync(snowPath)) {
-        inputs.push(`-stream_loop -1 -i "${snowPath.replace(/\\/g, "/")}"`);
-        const snowInputIdx = nextInputIdx++;
-        filterParts.push(
-          `[${snowInputIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[v_snow]`
-        );
-        filterParts.push(`[v_scene][v_snow]blend=all_mode=screen:all_opacity=0.88[vout]`);
-      } else {
-        filterParts.push(`[v_scene]null[vout]`);
-      }
-    } else {
-      filterParts.push(`[v1][${cardInputIdx}:v]overlay=x=${cardX}:y=${cardY}[vout]`);
-    }
+    // 2. Overlay Card
+    filterParts.push(`[v1][${cardInputIdx}:v]overlay=x=${cardX}:y=${cardY}[vout]`);
 
     // 3. Audio Input
     const audioInputIdx = nextInputIdx++;
@@ -400,7 +377,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         imageCount: slideImages.length,
         facebookCaption,
         musicId: musicId || "none",
-        enableSnow,
       },
     });
   } catch (error) {

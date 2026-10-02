@@ -24,7 +24,6 @@ interface ZTTeamVideoResult {
   createdAt: string;
   facebookCaption?: string;
   musicId?: string;
-  enableSnow?: boolean;
 }
 
 export default function ZTTeamUrlToVideoPage() {
@@ -42,7 +41,6 @@ export default function ZTTeamUrlToVideoPage() {
   const [badgeText, setBadgeText] = useState("BREAKING NEWS");
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "1:1">("9:16");
   const [duration, setDuration] = useState<number>(6);
-  const [enableSnow, setEnableSnow] = useState<boolean>(true);
 
   // Font Size Zoom State (Cỡ chữ phóng to nhỏ)
   const [fontSize, setFontSize] = useState<number>(42);
@@ -169,7 +167,7 @@ export default function ZTTeamUrlToVideoPage() {
 
         // Tự động tạo ảnh preview ngay sau khi cào
         if (data.images.length > 0 && data.hookText) {
-          triggerAutoPreview(data.images.slice(0, 4), data.hookText, aspectRatio, badgeText, enableSnow, effectiveFontSize);
+          triggerAutoPreview(data.images.slice(0, 4), data.hookText, aspectRatio, badgeText, effectiveFontSize);
         }
       } else {
         setFetchError(json.error || "Không thể cào dữ liệu từ URL này");
@@ -187,7 +185,6 @@ export default function ZTTeamUrlToVideoPage() {
     text: string,
     ratio: "9:16" | "1:1",
     badge: string,
-    snow: boolean = enableSnow,
     fontSizeVal: number = effectiveFontSize
   ) => {
     if (imgs.length === 0 || !text.trim()) return;
@@ -201,7 +198,6 @@ export default function ZTTeamUrlToVideoPage() {
           hookText: text,
           aspectRatio: ratio,
           badgeText: badge,
-          enableSnow: snow,
           fontSize: fontSizeVal,
         }),
       });
@@ -219,7 +215,7 @@ export default function ZTTeamUrlToVideoPage() {
   useEffect(() => {
     if (!articleData || selectedImages.length === 0 || !hookText.trim()) return;
     const timer = setTimeout(() => {
-      triggerAutoPreview(selectedImages, hookText, aspectRatio, badgeText, enableSnow, effectiveFontSize);
+      triggerAutoPreview(selectedImages, hookText, aspectRatio, badgeText, effectiveFontSize);
     }, 450);
     return () => clearTimeout(timer);
   }, [effectiveFontSize, aspectRatio]);
@@ -629,7 +625,6 @@ export default function ZTTeamUrlToVideoPage() {
           hookText,
           aspectRatio,
           badgeText,
-          enableSnow,
           fontSize: effectiveFontSize,
         }),
       });
@@ -683,7 +678,6 @@ export default function ZTTeamUrlToVideoPage() {
           musicId: selectedMusicId,
           musicVolume,
           customMusicUrl: selectedTrack?.isCustom ? selectedTrack.url : "",
-          enableSnow,
           fontSize: effectiveFontSize,
         }),
       });
@@ -694,7 +688,6 @@ export default function ZTTeamUrlToVideoPage() {
           ...json.data,
           facebookCaption: facebookCaption || json.data.facebookCaption || "",
           musicId: selectedMusicId,
-          enableSnow: json.data.enableSnow ?? enableSnow,
           createdAt: new Date().toLocaleTimeString(),
         };
         setVideoResult(newResult);
@@ -1247,7 +1240,7 @@ export default function ZTTeamUrlToVideoPage() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
               <h3 className="text-sm font-bold text-slate-200">Cấu Hình Video</h3>
               
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {/* Aspect Ratio */}
                 <div className="space-y-1.5">
                   <label className="text-xs text-slate-400 font-semibold">Tỷ lệ khung hình</label>
@@ -1303,38 +1296,6 @@ export default function ZTTeamUrlToVideoPage() {
                     onChange={(e) => setBadgeText(e.target.value.toUpperCase())}
                     className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-red-500 font-extrabold text-xs tracking-wider uppercase focus:outline-none focus:ring-2 focus:ring-red-500/40"
                   />
-                </div>
-
-                {/* Slow Snowfall Toggle */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs text-slate-400 font-semibold flex items-center gap-1">
-                      <span>❄️ Tuyết rơi chậm</span>
-                    </label>
-                    <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded ${
-                      enableSnow ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" : "bg-slate-800 text-slate-500"
-                    }`}>
-                      {enableSnow ? "Đang bật" : "Tắt"}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextVal = !enableSnow;
-                      setEnableSnow(nextVal);
-                      if (selectedImages.length > 0 && hookText.trim()) {
-                        triggerAutoPreview(selectedImages, hookText, aspectRatio, badgeText, nextVal);
-                      }
-                    }}
-                    className={`w-full p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                      enableSnow
-                        ? "bg-cyan-500/15 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 shadow-sm shadow-cyan-500/10"
-                        : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"
-                    }`}
-                  >
-                    <span className="text-sm">{enableSnow ? "❄️" : "⚪"}</span>
-                    <span>{enableSnow ? "Hiệu ứng: Bật" : "Hiệu ứng: Tắt"}</span>
-                  </button>
                 </div>
               </div>
             </div>
@@ -1665,11 +1626,6 @@ export default function ZTTeamUrlToVideoPage() {
                                 • 🎵 {musicTracks.find((m) => m.id === videoResult.musicId)?.title || "Nhạc nền"}
                               </span>
                             )}
-                            {videoResult.enableSnow && (
-                              <span className="text-cyan-400 font-semibold ml-1">
-                                • ❄️ Tuyết rơi
-                              </span>
-                            )}
                           </span>
                           <span>{videoResult.createdAt}</span>
                         </div>
@@ -1829,7 +1785,7 @@ export default function ZTTeamUrlToVideoPage() {
                 <div className="flex-1 min-w-0 space-y-1">
                   <h4 className="text-xs font-bold text-white truncate">{vid.title}</h4>
                   <p className="text-[11px] text-slate-400 truncate">
-                    {vid.aspectRatio} • {vid.duration}s • {vid.createdAt} {vid.enableSnow ? "• ❄️ Tuyết" : ""}
+                    {vid.aspectRatio} • {vid.duration}s • {vid.createdAt}
                   </p>
                   <div className="flex items-center gap-2 pt-1">
                     <button
